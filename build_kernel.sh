@@ -5,7 +5,7 @@ set -e
 DIR=$(readlink -f .)
 MAIN=$(readlink -f ${DIR}/..)
 KERNEL_DEFCONFIG="gki_defconfig vendor/pineapple_GKI.config"
-CLANG_DIR="$MAIN/toolchains/clang-17"
+CLANG_DIR="$MAIN/toolchains/clang-1"
 KERNEL_DIR=$(pwd)
 OUT_DIR="$KERNEL_DIR/out"
 ZIMAGE_DIR="$OUT_DIR/arch/arm64/boot"
@@ -42,39 +42,61 @@ check_clang() {
     return 1
 }
 
-# Install Clang if needed
+# Install ZyC Clang 22.0.0git
+CLANG_DIR="$MAIN/toolchains/zyc-clang-22"
+CLANG_URL="https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+ARCHIVE_NAME="zyc-clang-22.tar.gz"
+
+check_clang() {
+    [ -x "$CLANG_DIR/bin/clang" ] &&
+    [ -x "$CLANG_DIR/bin/clang++" ] &&
+    [ -x "$CLANG_DIR/bin/ld.lld" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-ar" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-nm" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-strip" ]
+}
+
 if ! check_clang; then
-    echo "No valid Clang found. Installing..."
-    echo "1. AOSP Clang (clang-r487747c)"
-    echo "2. Prelude Clang"
-    read -p "Choose [1-2]: " clang_choice
+    echo "ZyC Clang 22.0.0 indiriliyor..."
+    mkdir -p "$CLANG_DIR"
 
-    case "$clang_choice" in
-        1)
-            CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r487747c.tar.gz"
-            ARCHIVE_NAME="clang.tar.gz"
-            mkdir -p "$CLANG_DIR"
-            wget -P "$MAIN" "$CLANG_URL" -O "$MAIN/$ARCHIVE_NAME" || exit 1
-            tar -xf "$MAIN/$ARCHIVE_NAME" -C "$CLANG_DIR" --strip-components=1 || exit 1
-            rm -f "$MAIN/$ARCHIVE_NAME"
-            ;;
-        2)
-            git clone --depth=1 https://gitlab.com/jjpprrrr/prelude-clang.git "$CLANG_DIR" || exit 1
-            ;;
-        *)
-            echo "Invalid choice. Exiting..."
-            exit 1
-            ;;
-    esac
-
-    if ! check_clang; then
-        echo "Clang installation failed. Exiting..."
-        exit 1
-    fi
+    wget -O "$MAIN/$ARCHIVE_NAME" "$CLANG_URL"
+    
+    # ZyC tar.gz kullandığı için -xzf ile çıkarıyoruz.
+    # --strip-components komutunu sildik çünkü ZyC'nin yapısını bozar.
+    tar -xzf "$MAIN/$ARCHIVE_NAME" -C "$CLANG_DIR"
+    rm -f "$MAIN/$ARCHIVE_NAME"
 fi
 
-# Set up toolchain
-export LD=ld.lld
+if ! check_clang; then
+    echo "HATA: ZyC Clang 22 kurulumu tamamlanamadi."
+    ls -lah "$CLANG_DIR"
+    ls -lah "$CLANG_DIR/bin" || true
+    exit 1
+fi
+
+# Use the same LLVM toolchain for compiler and linker
+export PATH="$CLANG_DIR/bin:$PATH"
+export CC="$CLANG_DIR/bin/clang"
+export CXX="$CLANG_DIR/bin/clang++"
+export HOSTCC="$CLANG_DIR/bin/clang"
+export HOSTCXX="$CLANG_DIR/bin/clang++"
+export LD="$CLANG_DIR/bin/ld.lld"
+export HOSTLD="$CLANG_DIR/bin/ld.lld"
+export AR="$CLANG_DIR/bin/llvm-ar"
+export HOSTAR="$CLANG_DIR/bin/llvm-ar"
+export NM="$CLANG_DIR/bin/llvm-nm"
+export STRIP="$CLANG_DIR/bin/llvm-strip"
+export OBJCOPY="$CLANG_DIR/bin/llvm-objcopy"
+export OBJDUMP="$CLANG_DIR/bin/llvm-objdump"
+export LLVM=1
+export LLVM_IAS=1
+
+export KBUILD_COMPILER_STRING="$("$CC" --version | head -n 1)"
+echo "Kullanilan Clang: $KBUILD_COMPILER_STRING"
+echo "Kullanilan LLD: $("$LD" --version | head -n 1)"
+
+# Set up target
 export ARCH=arm64
 export SUBARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -91,6 +113,7 @@ INCLUDE_PATHS="
 "
 
 # Build flags
+export KCFLAGS="-march=armv9.2-a -Wno-uninitialized-const-pointer -Wno-uninitialized"
 MAKE_OPTS="
     CC=clang
     STRIP=llvm-strip
@@ -105,6 +128,7 @@ MAKE_OPTS="
     HOSTLD=ld.lld
     LLVM=1
     LLVM_IAS=1
+    LTO=thin
     $INCLUDE_PATHS
 "
 
