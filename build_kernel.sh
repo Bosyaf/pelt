@@ -113,7 +113,7 @@ INCLUDE_PATHS="
 "
 
 # Build flags
-export KCFLAGS="-march=armv9.2-a -Wno-uninitialized-const-pointer -Wno-uninitialized"
+export KCFLAGS="-march=armv9.2-a -Wno-uninitialized-const-pointer -Wno-uninitialized -Wno-default-const-init-var-unsafe"
 MAKE_OPTS="
     CC=clang
     STRIP=llvm-strip
