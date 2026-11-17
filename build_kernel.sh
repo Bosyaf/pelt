@@ -29,7 +29,75 @@ export SYNX_ROOT="$KERNEL_DIR/techpack/synx-kernel"
 export TOUCH_ROOT="$KERNEL_DIR/techpack/touch-drivers"
 export WLAN_ROOT="$KERNEL_DIR/techpack/wlan"
 
-curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+echo "====================================================="
+echo "🛡️ KSU-NEXT + SUSFS + MULTI-MANAGER KURULUMU BAŞLIYOR"
+echo "====================================================="
+
+# 1. KSU-Next Kurulumu
+echo "📦 [1/5] KernelSU-Next kuruluyor..."
+git clone --depth=1 https://github.com/Bosyaf/Ksu-next.git KernelSU-Next
+bash KernelSU-Next/kernel/setup.sh
+echo "✅ [1/5] KernelSU-Next kurulumu tamamlandı!"
+
+# 2. Multi-Manager Patch Uygulaması (İnternetten Canlı Çekim)
+echo "🔥 [2/5] Multi-Manager patch uygulanıyor..."
+wget -q "https://raw.githubusercontent.com/Bosyaf/Kernel-Action/main/patches/ksu/ksun-add-more-managers-support.patch" -O ksun-add-more-managers-support.patch || \
+curl -LSs "https://raw.githubusercontent.com/Bosyaf/Kernel-Action/main/patches/ksu/ksun-add-more-managers-support.patch" -o ksun-add-more-managers-support.patch
+
+if [ -f "ksun-add-more-managers-support.patch" ]; then
+  cd KernelSU-Next
+  patch -p1 --forward < "../ksun-add-more-managers-support.patch" && \
+  echo "✅ [2/5] Multi-Manager patch başarılı!" || echo "⚠️ [2/5] Patch uygulanamadı (Zaten uygulanmış olabilir)"
+  cd ..
+  rm -f ksun-add-more-managers-support.patch
+else
+  echo "⚠️ [2/5] Patch dosyası internetten çekilemedi, atlanıyor..."
+fi
+
+# 3. SUSFS İndirme ve Dosya Kopyalama
+echo "📦 [3/5] SUSFS kuruluyor..."
+git clone --depth=1 https://github.com/Bosyaf/Susfs.git susfs4ksu
+echo "📦 SUSFS dosyaları kopyalanıyor..."
+cp -R susfs4ksu/kernel_patches/fs/* ./fs/
+cp -R susfs4ksu/kernel_patches/include/* ./include/
+echo "✅ [3/5] SUSFS dosyaları kopyalandı!"
+
+# 3.1 Ana SUSFS Patch Uygulaması
+echo "📦 [3.1/5] Ana SUSFS patch uygulanıyor..."
+SUSFS_PATCH=$(ls susfs4ksu/kernel_patches/50_add_susfs*.patch 2>/dev/null | head -1)
+if [ -n "$SUSFS_PATCH" ]; then
+  patch -p1 < "$SUSFS_PATCH" || true
+  echo "✅ [3.1/5] Ana SUSFS patch uygulandı!"
+else
+  echo "⚠️ [3.1/5] Patch dosyası bulunamadı, atlanıyor..."
+fi
+
+# 4. fs_namespace Patch Uygulaması
+echo "📦 [4/5] fs_namespace.patch uygulanıyor..."
+wget -q "https://raw.githubusercontent.com/Bosyaf/Kernel-Action/main/fs_namespace.patch" -O fs_namespace.patch || \
+curl -LSs "https://raw.githubusercontent.com/Bosyaf/Kernel-Action/main/fs_namespace.patch" -o fs_namespace.patch
+
+if [ -f fs_namespace.patch ]; then
+  patch -p1 < fs_namespace.patch || true
+  echo "✅ [4/5] fs_namespace.patch uygulandı!"
+else
+  echo "⚠️ [4/5] Patch bulunamadı"
+fi
+rm -f fs_namespace.patch
+
+# 5. SUSFS Dentry Check Fix (Canlı Sed Yaması)
+echo "🛡️ [5/5] SUSFS Dentry Check Fix (Canlı Yama) uygulanıyor..."
+sed -i 's/return (base->d_inode->i_mapping->flags & BIT_ANDROID_DATA_ROOT_DIR);/return (base \&\& !IS_ERR(base) \&\& base->d_inode \&\& (base->d_inode->i_mapping->flags \& BIT_ANDROID_DATA_ROOT_DIR));/g' fs/susfs.c
+sed -i 's/return (base->d_inode->i_mapping->flags & BIT_ANDROID_SDCARD_ROOT_DIR);/return (base \&\& !IS_ERR(base) \&\& base->d_inode \&\& (base->d_inode->i_mapping->flags \& BIT_ANDROID_SDCARD_ROOT_DIR));/g' fs/susfs.c
+# HOUJI CUSTOM FIX: True/False çakışmasını gideren Canlı Yama
+sed -i 's/extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;/extern struct static_key_false susfs_is_sdcard_android_data_not_decrypted;/g' fs/namespace.c
+echo "✅ [5/5] Canlı Yama Başarılı!"
+
+# Temizlik
+find . -name "*.rej" -delete 2>/dev/null || true
+rm -rf susfs4ksu
+echo "🎉 SUSFS VE KSU SİSTEMİ KUSURSUZ KURULDU!"
+echo "====================================================="
 
 # Function to check for existing Clang
 check_clang() {
@@ -42,71 +110,143 @@ check_clang() {
     return 1
 }
 
-# Install Clang if needed
+
+# Install ZyC Clang 22.0.0git
+CLANG_DIR="$MAIN/toolchains/zyc-clang-22"
+CLANG_URL="https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+ARCHIVE_NAME="zyc-clang-22.tar.gz"
+
+# Check ZyC Clang installation
+check_clang() {
+    [ -x "$CLANG_DIR/bin/clang" ] &&
+    [ -x "$CLANG_DIR/bin/clang++" ] &&
+    [ -x "$CLANG_DIR/bin/ld.lld" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-ar" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-nm" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-strip" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-objcopy" ] &&
+    [ -x "$CLANG_DIR/bin/llvm-objdump" ]
+}
+
+# Download and install ZyC Clang if needed
 if ! check_clang; then
-    echo "No valid Clang found. Installing..."
-    echo "1. AOSP Clang (clang-r487747c)"
-    echo "2. Prelude Clang"
-    read -p "Choose [1-2]: " clang_choice
+    echo "ZyC Clang 22.0.0 indiriliyor..."
+    mkdir -p "$CLANG_DIR"
 
-    case "$clang_choice" in
-        1)
-            CLANG_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r487747c.tar.gz"
-            ARCHIVE_NAME="clang.tar.gz"
-            mkdir -p "$CLANG_DIR"
-            wget -P "$MAIN" "$CLANG_URL" -O "$MAIN/$ARCHIVE_NAME" || exit 1
-            tar -xf "$MAIN/$ARCHIVE_NAME" -C "$CLANG_DIR" --strip-components=1 || exit 1
-            rm -f "$MAIN/$ARCHIVE_NAME"
-            ;;
-        2)
-            git clone --depth=1 https://gitlab.com/jjpprrrr/prelude-clang.git "$CLANG_DIR" || exit 1
-            ;;
-        *)
-            echo "Invalid choice. Exiting..."
-            exit 1
-            ;;
-    esac
-
-    if ! check_clang; then
-        echo "Clang installation failed. Exiting..."
+    wget -O "$MAIN/$ARCHIVE_NAME" "$CLANG_URL" || {
+        echo "HATA: ZyC Clang indirilemedi."
         exit 1
-    fi
+    }
+
+    tar -xzf "$MAIN/$ARCHIVE_NAME" -C "$CLANG_DIR" || {
+        echo "HATA: ZyC Clang arsivi acilamadi."
+        rm -f "$MAIN/$ARCHIVE_NAME"
+        exit 1
+    }
+
+    rm -f "$MAIN/$ARCHIVE_NAME"
 fi
 
-# Set up toolchain
-export LD=ld.lld
+# Verify ZyC Clang installation
+if ! check_clang; then
+    echo "HATA: ZyC Clang kurulumu tamamlanamadi."
+    ls -lah "$CLANG_DIR"
+    ls -lah "$CLANG_DIR/bin" || true
+    exit 1
+fi
+
+# Use ZyC Clang for kernel and host compilation
+export PATH="$CLANG_DIR/bin:$PATH"
+
+export CC="$CLANG_DIR/bin/clang"
+export CXX="$CLANG_DIR/bin/clang++"
+export HOSTCC="$CLANG_DIR/bin/clang"
+export HOSTCXX="$CLANG_DIR/bin/clang++"
+
+export LD="$CLANG_DIR/bin/ld.lld"
+export HOSTLD="$CLANG_DIR/bin/ld.lld"
+export AR="$CLANG_DIR/bin/llvm-ar"
+export HOSTAR="$CLANG_DIR/bin/llvm-ar"
+export NM="$CLANG_DIR/bin/llvm-nm"
+export STRIP="$CLANG_DIR/bin/llvm-strip"
+export OBJCOPY="$CLANG_DIR/bin/llvm-objcopy"
+export OBJDUMP="$CLANG_DIR/bin/llvm-objdump"
+
+export LLVM=1
+export LLVM_IAS=1
+
+export KBUILD_COMPILER_STRING="$("$CC" --version | head -n 1)"
+echo "Kullanilan Clang: $KBUILD_COMPILER_STRING"
+echo "Kullanilan LLD: $("$LD" --version | head -n 1)"
+echo "Kullanilan LLVM AR: $("$AR" --version | head -n 1)"
+
+# Set up target
 export ARCH=arm64
 export SUBARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
 
 # Include paths
 export KERNEL_SRC="$KERNEL_DIR"
+
 INCLUDE_PATHS="
-    -I$KERNEL_DIR/include
-    -I$KERNEL_DIR/arch/arm64/include
-    -I$KERNEL_DIR/drivers/base/regmap
-    -I$AUDIO_ROOT/include
-    -I$CAMERA_ROOT/include
-    -I$DISPLAY_ROOT/include
+-I$KERNEL_DIR/include
+-I$KERNEL_DIR/arch/arm64/include
+-I$KERNEL_DIR/drivers/base/regmap
+-I$AUDIO_ROOT/include
+-I$CAMERA_ROOT/include
+-I$DISPLAY_ROOT/include
 "
 
 # Build flags
+export KCFLAGS="-O2 \
+-march=armv9.2-a+crypto+crc+dotprod+rcpc+lse+sha3 \
+-falign-functions=32 \
+-fomit-frame-pointer \
+-ffunction-sections \
+-fdata-sections \
+-fstack-protector \
+-fno-unwind-tables \
+-fno-asynchronous-unwind-tables \
+-fno-math-errno \
+-fno-semantic-interposition \
+-Wno-frame-larger-than \
+-Wno-unused-command-line-argument \
+-Wno-error \
+-Wno-format \
+-Wno-format-extra-args \
+-Wno-constant-logical-operand \
+-Wno-unused-variable \
+-Wno-address-of-packed-member \
+-Wno-uninitialized-const-pointer \
+-Wno-uninitialized \
+-Wno-default-const-init-var-unsafe \
+-Wno-default-const-init-field-unsafe"
+
+export KLDFLAGS="-Wl,--gc-sections \
+-Wl,--as-needed \
+-Wl,--strip-debug \
+-Wl,--icf=safe \
+-Wl,--no-warnings \
+-Wl,-O2"
+
+# Make options: use ZyC Clang toolchain paths explicitly
 MAKE_OPTS="
-    CC=clang
-    STRIP=llvm-strip
-    LD=ld.lld
-    AR=llvm-ar
-    NM=llvm-nm
-    OBJCOPY=llvm-objcopy
-    OBJDUMP=llvm-objdump
-    HOSTCC=clang
-    HOSTCXX=clang++
-    HOSTAR=llvm-ar
-    HOSTLD=ld.lld
-    LLVM=1
-    LLVM_IAS=1
-    $INCLUDE_PATHS
+CC=$CLANG_DIR/bin/clang
+LD=$CLANG_DIR/bin/ld.lld
+AR=$CLANG_DIR/bin/llvm-ar
+NM=$CLANG_DIR/bin/llvm-nm
+STRIP=$CLANG_DIR/bin/llvm-strip
+OBJCOPY=$CLANG_DIR/bin/llvm-objcopy
+OBJDUMP=$CLANG_DIR/bin/llvm-objdump
+HOSTCC=$CLANG_DIR/bin/clang
+HOSTCXX=$CLANG_DIR/bin/clang++
+HOSTLD=$CLANG_DIR/bin/ld.lld
+HOSTAR=$CLANG_DIR/bin/llvm-ar
+LLVM=1
+LLVM_IAS=1
+$INCLUDE_PATHS
 "
+
 
 # Apply YYLLOC workaround
 echo "Applying YYLLOC workaround..."
@@ -202,7 +342,7 @@ if [ $BUILD_HAS_MODULES -gt 0 ]; then
         mkdir -p "$TEMP_ANY_KERNEL_DIR/_modules"
     fi
 
-    # List of specific modules to include
+        # List of specific modules to include
     IMPORTANT_MODULES=(
         "ipam.ko" "ipanetm.ko"
         "msm_drm.ko" "msm_kgsl.ko"
@@ -214,7 +354,6 @@ if [ $BUILD_HAS_MODULES -gt 0 ]; then
     for module in "${IMPORTANT_MODULES[@]}"; do
         find "$MODULES_DIR/lib/modules" -name "$module" -exec cp -v {} "$TEMP_ANY_KERNEL_DIR/_modules/" \;
     done
-
 
     echo "Modules in _modules:"
     ls -lh "$TEMP_ANY_KERNEL_DIR/_modules"
